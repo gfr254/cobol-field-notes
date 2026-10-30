@@ -135,83 +135,83 @@ def escape_xml(value):
 
 
 
-    def plain_text_to_html(text):
-        paragraphs = re.split(r"\n\s*\n+", str(text or "").strip())
-        return "\n".join(
-            "<p>" + html.escape(paragraph.strip()).replace("\n", "<br>") + "</p>"
-            for paragraph in paragraphs
-            if paragraph.strip()
-        )
+def plain_text_to_html(text):
+    paragraphs = re.split(r"\n\s*\n+", str(text or "").strip())
+    return "\n".join(
+        "<p>" + html.escape(paragraph.strip()).replace("\n", "<br>") + "</p>"
+        for paragraph in paragraphs
+        if paragraph.strip()
+    )
 
 
-    def format_existing_article(endpoint, headers, expected_title):
-        seen_urls = set()
-        url = endpoint
-        found = None
-        for _ in range(20):
-            if url in seen_urls:
-                raise RuntimeError("Hatena feed pagination repeated a URL; refusing to edit")
-            seen_urls.add(url)
-            with request(url, headers=headers) as response:
-                root = ET.fromstring(response.read())
-            if root.tag != "{http://www.w3.org/2005/Atom}feed":
-                raise RuntimeError("Hatena returned an unexpected Atom feed")
-            for entry in root.findall("atom:entry", {"atom": "http://www.w3.org/2005/Atom"}):
-                title = entry.findtext("atom:title", default="", namespaces={"atom": "http://www.w3.org/2005/Atom"}).strip()
-                if title.casefold() == expected_title.strip().casefold():
-                    if found is not None:
-                        raise RuntimeError("Multiple matching Hatena entries found; refusing to edit")
-                    found = entry
-            next_url = None
-            for link in root.findall("atom:link", {"atom": "http://www.w3.org/2005/Atom"}):
-                if link.attrib.get("rel") == "next":
-                    next_url = urllib.parse.urljoin(url, link.attrib.get("href", ""))
-                    break
-            if not next_url:
+def format_existing_article(endpoint, headers, expected_title):
+    seen_urls = set()
+    url = endpoint
+    found = None
+    for _ in range(20):
+        if url in seen_urls:
+            raise RuntimeError("Hatena feed pagination repeated a URL; refusing to edit")
+        seen_urls.add(url)
+        with request(url, headers=headers) as response:
+            root = ET.fromstring(response.read())
+        if root.tag != "{http://www.w3.org/2005/Atom}feed":
+            raise RuntimeError("Hatena returned an unexpected Atom feed")
+        for entry in root.findall("atom:entry", {"atom": "http://www.w3.org/2005/Atom"}):
+            title = entry.findtext("atom:title", default="", namespaces={"atom": "http://www.w3.org/2005/Atom"}).strip()
+            if title.casefold() == expected_title.strip().casefold():
+                if found is not None:
+                    raise RuntimeError("Multiple matching Hatena entries found; refusing to edit")
+                found = entry
+        next_url = None
+        for link in root.findall("atom:link", {"atom": "http://www.w3.org/2005/Atom"}):
+            if link.attrib.get("rel") == "next":
+                next_url = urllib.parse.urljoin(url, link.attrib.get("href", ""))
                 break
-            parsed_next = urllib.parse.urlparse(next_url)
-            if parsed_next.scheme != "https" or parsed_next.hostname != "blog.hatena.ne.jp":
-                raise RuntimeError("Hatena returned an unexpected pagination URL")
-            url = next_url
-        else:
-            raise RuntimeError("Hatena feed pagination exceeded the safety limit")
-        if found is None:
-            raise RuntimeError("Matching published article was not found; refusing to create a post")
-        atom_ns = "http://www.w3.org/2005/Atom"
-        content = found.find("atom:content", {"atom": atom_ns})
-        if content is None or content.attrib.get("type") not in ("text", "text/plain") or content.text is None:
-            raise RuntimeError("Article is not plain text; refusing to reformat")
-        edit_link = next((link.attrib.get("href") for link in found.findall("atom:link", {"atom": atom_ns}) if link.attrib.get("rel") == "edit"), None)
-        if not edit_link:
-            raise RuntimeError("Hatena edit link not found; refusing to edit")
-        parsed_edit = urllib.parse.urlparse(urllib.parse.urljoin(endpoint, edit_link))
-        expected_prefix = urllib.parse.urlparse(endpoint).path + "/"
-        if parsed_edit.scheme != "https" or parsed_edit.hostname != "blog.hatena.ne.jp" or not parsed_edit.path.startswith(expected_prefix):
-            raise RuntimeError("Hatena returned an unexpected edit URL; refusing to edit")
-        root = ET.Element("{" + atom_ns + "}entry")
-        ET.SubElement(root, "{" + atom_ns + "}title").text = expected_title
-        ET.SubElement(root, "{" + atom_ns + "}content", {"type": "html"}).text = plain_text_to_html(content.text)
-        for category in found.findall("atom:category", {"atom": atom_ns}):
-            if category.attrib.get("term"):
-                ET.SubElement(root, "{" + atom_ns + "}category", {"term": category.attrib["term"]})
-        put_headers = {**headers, "Content-Type": "application/atom+xml; charset=utf-8"}
-        with request(parsed_edit.geturl(), method="PUT", headers=put_headers, body=ET.tostring(root, encoding="utf-8", xml_declaration=True)) as response:
-            pass
-        print("Formatted existing article: " + expected_title)
+        if not next_url:
+            break
+        parsed_next = urllib.parse.urlparse(next_url)
+        if parsed_next.scheme != "https" or parsed_next.hostname != "blog.hatena.ne.jp":
+            raise RuntimeError("Hatena returned an unexpected pagination URL")
+        url = next_url
+    else:
+        raise RuntimeError("Hatena feed pagination exceeded the safety limit")
+    if found is None:
+        raise RuntimeError("Matching published article was not found; refusing to create a post")
+    atom_ns = "http://www.w3.org/2005/Atom"
+    content = found.find("atom:content", {"atom": atom_ns})
+    if content is None or content.attrib.get("type") not in ("text", "text/plain") or content.text is None:
+        raise RuntimeError("Article is not plain text; refusing to reformat")
+    edit_link = next((link.attrib.get("href") for link in found.findall("atom:link", {"atom": atom_ns}) if link.attrib.get("rel") == "edit"), None)
+    if not edit_link:
+        raise RuntimeError("Hatena edit link not found; refusing to edit")
+    parsed_edit = urllib.parse.urlparse(urllib.parse.urljoin(endpoint, edit_link))
+    expected_prefix = urllib.parse.urlparse(endpoint).path + "/"
+    if parsed_edit.scheme != "https" or parsed_edit.hostname != "blog.hatena.ne.jp" or not parsed_edit.path.startswith(expected_prefix):
+        raise RuntimeError("Hatena returned an unexpected edit URL; refusing to edit")
+    root = ET.Element("{" + atom_ns + "}entry")
+    ET.SubElement(root, "{" + atom_ns + "}title").text = expected_title
+    ET.SubElement(root, "{" + atom_ns + "}content", {"type": "html"}).text = plain_text_to_html(content.text)
+    for category in found.findall("atom:category", {"atom": atom_ns}):
+        if category.attrib.get("term"):
+            ET.SubElement(root, "{" + atom_ns + "}category", {"term": category.attrib["term"]})
+    put_headers = {**headers, "Content-Type": "application/atom+xml; charset=utf-8"}
+    with request(parsed_edit.geturl(), method="PUT", headers=put_headers, body=ET.tostring(root, encoding="utf-8", xml_declaration=True)) as response:
+        pass
+    print("Formatted existing article: " + expected_title)
 
 
-    def process_format_request(endpoint, headers):
-        request_path = "format-request.json"
-        if not os.path.exists(request_path):
-            return False
-        with open(request_path, "r", encoding="utf-8") as file:
-            data = json.load(file)
-        if data.get("action") != "format_existing" or not isinstance(data.get("title"), str) or not data["title"].strip():
-            raise RuntimeError("Invalid format request; refusing to publish or edit")
-        format_existing_article(endpoint, headers, data["title"])
-        return True
+def process_format_request(endpoint, headers):
+    request_path = "format-request.json"
+    if not os.path.exists(request_path):
+        return False
+    with open(request_path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    if data.get("action") != "format_existing" or not isinstance(data.get("title"), str) or not data["title"].strip():
+        raise RuntimeError("Invalid format request; refusing to publish or edit")
+    format_existing_article(endpoint, headers, data["title"])
+    return True
 
-    def main():
+def main():
     user_id = required_env("HATENA_USER_ID")
     blog_id = required_env("HATENA_COBOL_BLOG_ID")
     api_key = required_env("HATENA_API_KEY")
