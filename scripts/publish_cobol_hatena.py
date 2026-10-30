@@ -179,12 +179,12 @@ def format_existing_article(endpoint, headers, expected_title):
         raise RuntimeError("Matching published article was not found; refusing to create a post")
     atom_ns = "http://www.w3.org/2005/Atom"
     content = found.find("atom:content", {"atom": atom_ns})
-        if content is None or content.attrib.get("type", "text") not in ("text", "text/plain", "html", "text/html"):
-            raise RuntimeError("Article content format is unsupported; refusing to reformat")
-        source_text = content.text if content.text is not None else "".join(content.itertext())
-        if not source_text.strip() or re.search(r"<\s*/?\s*[a-zA-Z!]", source_text):
-            raise RuntimeError("Article body is not plain text; refusing to reformat")
-        edit_link = next((link.attrib.get("href") for link in found.findall("atom:link", {"atom": atom_ns}) if link.attrib.get("rel") == "edit"), None)
+    if content is None or content.attrib.get("type", "text") not in ("text", "text/plain", "html", "text/html"):
+        raise RuntimeError("Article content format is unsupported; refusing to reformat")
+    source_text = content.text if content.text is not None else "".join(content.itertext())
+    if not source_text.strip() or re.search(r"<\s*/?\s*[a-zA-Z!]", source_text):
+        raise RuntimeError("Article body is not plain text; refusing to reformat")
+    edit_link = next((link.attrib.get("href") for link in found.findall("atom:link", {"atom": atom_ns}) if link.attrib.get("rel") == "edit"), None)
     if not edit_link:
         raise RuntimeError("Hatena edit link not found; refusing to edit")
     parsed_edit = urllib.parse.urlparse(urllib.parse.urljoin(endpoint, edit_link))
