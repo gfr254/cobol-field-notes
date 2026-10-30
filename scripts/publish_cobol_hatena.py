@@ -179,11 +179,17 @@ def format_existing_article(endpoint, headers, expected_title):
         raise RuntimeError("Matching published article was not found; refusing to create a post")
     atom_ns = "http://www.w3.org/2005/Atom"
     content = found.find("atom:content", {"atom": atom_ns})
-    if content is None or content.attrib.get("type", "text") not in ("text", "text/plain", "html", "text/html"):
+    if content is None or content.attrib.get("type", "text") not in ("text", "text/plain", "html", "text/html"): 
         raise RuntimeError("Article content format is unsupported; refusing to reformat")
     source_text = content.text if content.text is not None else "".join(content.itertext())
-    if not source_text.strip() or re.search(r"<\s*/?\s*[a-zA-Z!]", source_text):
-        raise RuntimeError("Article body is not plain text; refusing to reformat")
+    if not source_text.strip():
+        raise RuntimeError("Article body is empty; refusing to reformat")
+    if re.search(r"<\s*/?\s*[a-zA-Z!]", source_text):
+        formatted_body = re.sub(r"</p>\s*<p\b", "</p><br><br><p", source_text, flags=re.IGNORECASE)
+        if formatted_body == source_text.strip() or not re.search(r"<p\b", source_text, re.IGNORECASE):
+            raise RuntimeError("Article HTML has no safe paragraph boundaries; refusing to reformat")
+    else:
+        formatted_body = plain_text_to_html(source_text)
     edit_link = next((link.attrib.get("href") for link in found.findall("atom:link", {"atom": atom_ns}) if link.attrib.get("rel") == "edit"), None)
     if not edit_link:
         raise RuntimeError("Hatena edit link not found; refusing to edit")
@@ -193,7 +199,7 @@ def format_existing_article(endpoint, headers, expected_title):
         raise RuntimeError("Hatena returned an unexpected edit URL; refusing to edit")
     root = ET.Element("{" + atom_ns + "}entry")
     ET.SubElement(root, "{" + atom_ns + "}title").text = expected_title
-    ET.SubElement(root, "{" + atom_ns + "}content", {"type": "html"}).text = plain_text_to_html(source_text)
+    ET.SubElement(root, "{" + atom_ns + "}content", {"type": "html"}).text = formatted_body
     for category in found.findall("atom:category", {"atom": atom_ns}):
         if category.attrib.get("term"):
             ET.SubElement(root, "{" + atom_ns + "}category", {"term": category.attrib["term"]})
