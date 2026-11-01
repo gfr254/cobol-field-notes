@@ -73,56 +73,82 @@ def atom_feed_entries(endpoint, headers):
     raise RuntimeError("Hatena feed pagination exceeded the safety limit")
 
 
-def generate_article(api_key, date, previous_titles):
-    system = (
-        "あなたはCOBOLの一般的な実務知識を解説する日本語編集者です。"
-        "記事は特定の勤務先、顧客、実在システム、個人の経験談を含めず、"
-        "公開済みの一般知識だけを扱ってください。未確認の仕様や効果を断定せず、"
-        "処理系・環境によって違う場合は条件を明記してください。"
-        "読者が安全に学べる具体例を使い、秘密情報や実データを作らないでください。"
-        "本文はプレーンテキストで、Markdown記法・HTML・コードフェンスは使わないでください。"
-        "説明が必要なCOBOLコードは、短い架空の一般例だけにしてください。"
-        "日本語で600〜1400字程度。返答はJSON objectのみで、title、bodyを返してください。"
-    )
-    user = (
-        f"日本時間の日付は{date}です。次の既存記事と重複しない、"
-        f"COBOLの読解・データ定義・ファイル処理・テスト・保守・キャリアに関する"
-        f"実用的な記事を1本作成してください。\n既存タイトル: "
-        + " / ".join(sorted(previous_titles)[-80:])
-        + "\nタイトルは日本語で8〜40字にしてください。"
-    )
-    payload = {
-        "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-        "temperature": 0.4,
-        "max_tokens": 2000,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + api_key,
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with request(req.full_url, method="POST", headers=dict(req.header_items()), body=req.data) as response:
-        result = json.loads(response.read())
-    article = json.loads(result["choices"][0]["message"]["content"])
-    title = str(article.get("title", "")).strip()
-    body = str(article.get("body", "")).strip()
-    if not 8 <= len(title) <= 40 or not 600 <= len(body) <= 6000:
-        raise RuntimeError("Generated article failed length checks; nothing was published")
-    if re.search(r"<\s*/?\s*[a-zA-Z!]", body) or re.search(r"```|^\s{0,3}#{1,6}\s", body, re.M):
-        raise RuntimeError("Generated article is not plain text; nothing was published")
-    if re.search(r"勤務先|顧客|実在の.*システム|社内情報|個人情報", title + "\n" + body):
-        raise RuntimeError("Generated article may contain private workplace material; nothing was published")
-    return title, body
+def validate_article(title, body, previous_titles):
+        if not 8 <= len(title) <= 40:
+            raise RuntimeError("Generated title failed length checks; nothing was published")
+        if not 600 <= len(body) <= 6000:
+            raise RuntimeError("Generated article failed length checks; nothing was published")
+        if title.casefold() in previous_titles:
+            raise RuntimeError("Duplicate title found; nothing was published")
+        if re.search(r"<\s*/?\s*[a-zA-Z!]", body) or re.search(r"\u0060\u0060\u0060|^\s{0,3}#{1,6}\s", body, re.M):
+            raise RuntimeError("Generated article is not plain text; nothing was published")
+        if re.search(r"勤務先|顧客|実在の.*システム|社内情報|個人情報", title + "\n" + body):
+            raise RuntimeError("Generated article may contain private workplace material; nothing was published")
 
+
+    def generate_article(api_key, date, previous_titles):
+        system = (
+            "あなたはCOBOLの一般的な実務知識を解説する日本語編集者です。"
+            "記事は特定の勤務先、顧客、実在システム、個人の経験談を含めず、"
+            "公開済みの一般知識だけを扱ってください。未確認の仕様や効果を断定せず、"
+            "処理系・環境によって違う場合は条件を明記してください。"
+            "読者が安全に学べる具体例を使い、秘密情報や実データを作らないでください。"
+            "本文はプレーンテキストで、Markdown記法・HTML・コードフェンスは使わないでください。"
+            "説明が必要なCOBOLコードは、短い架空の一般例だけにしてください。"
+            "日本語で600〜1400字程度。返答はJSON objectのみで、title、bodyを返してください。"
+        )
+        user = (
+            f"日本時間の日付は{date}です。次の既存記事と重複しない、"
+            f"COBOLの読解・データ定義・ファイル処理・テスト・保守・キャリアに関する"
+            f"実用的な記事を1本作成してください。\n既存タイトル: "
+            + " / ".join(sorted(previous_titles)[-80:])
+            + "\nタイトルは日本語で8〜40字にしてください。"
+        )
+        validation_feedback = None
+        for attempt in range(3):
+            retry_user = user
+            if validation_feedback:
+                retry_user += (
+                    "\n前回の候補は公開前の検証に合格しませんでした。"
+                    "同じ記事テーマのまま、次の問題を直して書き直してください。"
+                    f"\n検証結果: {validation_feedback}"
+                    "\n安全条件とプレーンテキストの指定は緩めないでください。"
+                )
+            payload = {
+                "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                "temperature": 0.4,
+                "max_tokens": 2000,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": retry_user},
+                ],
+            }
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with request(req.full_url, method="POST", headers=dict(req.header_items()), body=req.data) as response:
+                result = json.loads(response.read())
+            article = json.loads(result["choices"][0]["message"]["content"])
+            title = str(article.get("title", "")).strip()
+            body = str(article.get("body", "")).strip()
+            try:
+                validate_article(title, body, previous_titles)
+                return title, body
+            except RuntimeError as error:
+                if attempt == 2:
+                    raise
+                validation_feedback = str(error)
+                print(f"Generated COBOL article failed validation; retrying with the same topic ({attempt + 1}/2).")
+
+        raise RuntimeError("Generated article did not pass validation; nothing was published")
+    
 
 def escape_xml(value):
     return (
