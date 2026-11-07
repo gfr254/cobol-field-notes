@@ -13,10 +13,27 @@ from zoneinfo import ZoneInfo
 
 
 def required_env(name):
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise SystemExit(f"Required environment variable is missing: {name}")
-    return value
+    value = os.environ.get(name)
+    if value is None or not str(value).strip():
+        raise SystemExit(
+            f"Missing required environment variable: {name}. "
+            "Set it in GitHub repository secrets or your local environment."
+        )
+    return str(value).strip()
+
+
+def http_error_details(exc):
+    detail = ""
+    try:
+        detail = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    detail = detail.strip()
+    if len(detail) > 1000:
+        detail = detail[:1000] + "..."
+    if detail:
+        return f" response={detail}"
+    return ""
 
 
 def request(url, method="GET", headers=None, body=None):
@@ -24,9 +41,11 @@ def request(url, method="GET", headers=None, body=None):
     try:
         return urllib.request.urlopen(req, timeout=90)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"HTTP request failed with status {exc.code}") from None
-    except urllib.error.URLError:
-        raise RuntimeError("Network request failed") from None
+        raise RuntimeError(
+            f"{method} {url} failed with HTTP {exc.code}.{http_error_details(exc)}"
+        ) from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{method} {url} failed: {exc.reason}") from None
 
 
 def atom_feed_entries(endpoint, headers):
@@ -133,9 +152,25 @@ def generate_article(api_key, date, previous_titles):
             },
             method="POST",
         )
-        with request(req.full_url, method="POST", headers=dict(req.header_items()), body=req.data) as response:
-            result = json.loads(response.read())
-        article = json.loads(result["choices"][0]["message"]["content"])
+        try:
+            with request(req.full_url, method="POST", headers=dict(req.header_items()), body=req.data) as response:
+                result = json.loads(response.read())
+        except Exception as exc:
+            raise RuntimeError(f"OpenAI API call failed: {exc}") from exc
+
+        if "error" in result:
+            error_info = result["error"]
+            if isinstance(error_info, dict):
+                message = error_info.get("message", str(error_info))
+                code = error_info.get("code", "unknown")
+                raise RuntimeError(f"OpenAI API returned error code={code}: {message}")
+            raise RuntimeError(f"OpenAI API returned error: {error_info}")
+
+        choices = result.get("choices")
+        if not choices:
+            raise RuntimeError(f"OpenAI API returned no completion data: {result}")
+
+        article = json.loads(choices[0]["message"]["content"])
         title = str(article.get("title", "")).strip()
         body = str(article.get("body", "")).strip()
         try:
@@ -204,7 +239,7 @@ def format_existing_article(endpoint, headers, expected_title):
         raise RuntimeError("Matching published article was not found; refusing to create a post")
     atom_ns = "http://www.w3.org/2005/Atom"
     content = found.find("atom:content", {"atom": atom_ns})
-    if content is None or content.attrib.get("type", "text") not in ("text", "text/plain", "html", "text/html"): 
+    if content is None or content.attrib.get("type", "text") not in ("text", "text/plain", "html", "text/html"):
         raise RuntimeError("Article content format is unsupported; refusing to reformat")
     source_text = content.text if content.text is not None else "".join(content.itertext())
     if not source_text.strip():
@@ -247,6 +282,19 @@ def process_format_request(endpoint, headers):
 
 
 def main():
+    required_secret_names = [
+        "HATENA_USER_ID",
+        "HATENA_COBOL_BLOG_ID",
+        "HATENA_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+    missing = [name for name in required_secret_names if not os.environ.get(name, "").strip()]
+    if missing:
+        raise SystemExit(
+            "Missing required GitHub secrets: " + ", ".join(missing) + ". "
+            "Ensure these are configured in the repository settings."
+        )
+
     user_id = required_env("HATENA_USER_ID")
     blog_id = required_env("HATENA_COBOL_BLOG_ID")
     api_key = required_env("HATENA_API_KEY")
