@@ -160,7 +160,6 @@ def escape_xml(value):
     )
 
 
-
 def plain_text_to_html(text):
     paragraphs = re.split(r"\n\s*\n+", str(text or "").strip())
     return "\n".join(
@@ -245,6 +244,7 @@ def process_format_request(endpoint, headers):
         raise RuntimeError("Invalid format request; refusing to publish or edit")
     format_existing_article(endpoint, headers, data["title"])
     return True
+
 
 def main():
     user_id = required_env("HATENA_USER_ID")
