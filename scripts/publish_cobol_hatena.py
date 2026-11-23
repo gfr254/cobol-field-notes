@@ -15,7 +15,9 @@ from zoneinfo import ZoneInfo
 # 実際のHTMLタグ・コメント・宣言だけを検出する。
 # "IF A < B" のような比較演算子はタグとみなさない。
 HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>|<!--|<![A-Za-z]")
-FENCE_RE = re.compile(r"`{3}")
+FENCE_MARK_RE = re.compile(r"`{3}")
+# 実在の職場を示す語だけを検出する。「顧客」「個人情報」は一般的な解説にも出るため対象外。
+PRIVATE_RE = re.compile(r"勤務先|当社|弊社|自社|うちの会社|実在の.{0,10}システム|社内情報")
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s", re.M)
 
 
@@ -106,9 +108,11 @@ def validate_article(title, body, previous_titles):
         raise RuntimeError("Generated article failed length checks; nothing was published")
     if title.casefold() in previous_titles:
         raise RuntimeError("Duplicate title found; nothing was published")
+    # コードフェンスは許可する(<pre>として出力する)。ただし閉じていないものは不可。
+    if len(FENCE_MARK_RE.findall(body)) % 2 != 0:
+        raise RuntimeError("Generated article has an unclosed code fence; nothing was published")
     for label, pattern in (
         ("HTML tag", HTML_TAG_RE),
-        ("code fence", FENCE_RE),
         ("Markdown heading", HEADING_RE),
     ):
         match = pattern.search(body)
@@ -117,8 +121,11 @@ def validate_article(title, body, previous_titles):
             raise RuntimeError(
                 f"Generated article is not plain text ({label}: {snippet!r}); nothing was published"
             )
-    if re.search(r"勤務先|顧客|実在の.*システム|社内情報|個人情報", title + "\n" + body):
-        raise RuntimeError("Generated article may contain private workplace material; nothing was published")
+    private = PRIVATE_RE.search(title + "\n" + body)
+    if private:
+        raise RuntimeError(
+            f"Generated article may contain private workplace material ({private.group(0)!r}); nothing was published"
+        )
 
 
 def generate_article(api_key, date, previous_titles):
@@ -128,8 +135,8 @@ def generate_article(api_key, date, previous_titles):
         "公開済みの一般知識だけを扱ってください。未確認の仕様や効果を断定せず、"
         "処理系・環境によって違う場合は条件を明記してください。"
         "読者が安全に学べる具体例を使い、秘密情報や実データを作らないでください。"
-        "本文はプレーンテキストで、Markdown記法・HTML・コードフェンスは使わないでください。"
-        "説明が必要なCOBOLコードは、短い架空の一般例だけにしてください。"
+        "本文はプレーンテキストで、Markdown見出し・HTML・太字などの記法は使わないでください。"
+        "説明が必要なCOBOLコードは、短い架空の一般例を、前後を行頭の ``` だけの行で囲んで最大1か所だけ入れてください。"
         "コード例では記号の < や > を使わず、IS LESS THAN / IS GREATER THAN のように英単語で書いてください。"
         "日本語で600〜1400字程度。返答はJSON objectのみで、title、bodyを返してください。"
     )
@@ -216,12 +223,20 @@ def escape_xml(value):
 
 
 def plain_text_to_html(text):
-    paragraphs = re.split(r"\n\s*\n+", str(text or "").strip())
-    return "\n".join(
-        "<p>" + html.escape(paragraph.strip()).replace("\n", "<br>") + "</p>"
-        for paragraph in paragraphs
-        if paragraph.strip()
-    )
+    text = str(text or "").strip()
+    # ``` で囲まれた部分は<pre>に、それ以外は段落にする(奇数番目がコード部分)
+    parts = re.split(r"```[^\n]*\n(.*?)\n?```", text, flags=re.DOTALL)
+    blocks = []
+    for index, part in enumerate(parts):
+        if index % 2 == 1:
+            code = part.strip("\n")
+            if code.strip():
+                blocks.append("<pre>" + html.escape(code) + "</pre>")
+            continue
+        for paragraph in re.split(r"\n\s*\n+", part.strip()):
+            if paragraph.strip():
+                blocks.append("<p>" + html.escape(paragraph.strip()).replace("\n", "<br>") + "</p>")
+    return "\n".join(blocks)
 
 
 def format_existing_article(endpoint, headers, expected_title):
