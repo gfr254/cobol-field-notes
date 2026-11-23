@@ -12,6 +12,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 
+# 実際のHTMLタグ・コメント・宣言だけを検出する。
+# "IF A < B" のような比較演算子はタグとみなさない。
+HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>|<!--|<![A-Za-z]")
+FENCE_RE = re.compile(r"`{3}")
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s", re.M)
+
+
 def required_env(name):
     value = os.environ.get(name)
     if value is None or not str(value).strip():
@@ -99,8 +106,17 @@ def validate_article(title, body, previous_titles):
         raise RuntimeError("Generated article failed length checks; nothing was published")
     if title.casefold() in previous_titles:
         raise RuntimeError("Duplicate title found; nothing was published")
-    if re.search(r"<\s*/?\s*[a-zA-Z!]", body) or re.search(r"\u0060\u0060\u0060|^\s{0,3}#{1,6}\s", body, re.M):
-        raise RuntimeError("Generated article is not plain text; nothing was published")
+    for label, pattern in (
+        ("HTML tag", HTML_TAG_RE),
+        ("code fence", FENCE_RE),
+        ("Markdown heading", HEADING_RE),
+    ):
+        match = pattern.search(body)
+        if match:
+            snippet = body[max(0, match.start() - 20): match.end() + 20]
+            raise RuntimeError(
+                f"Generated article is not plain text ({label}: {snippet!r}); nothing was published"
+            )
     if re.search(r"勤務先|顧客|実在の.*システム|社内情報|個人情報", title + "\n" + body):
         raise RuntimeError("Generated article may contain private workplace material; nothing was published")
 
@@ -114,6 +130,7 @@ def generate_article(api_key, date, previous_titles):
         "読者が安全に学べる具体例を使い、秘密情報や実データを作らないでください。"
         "本文はプレーンテキストで、Markdown記法・HTML・コードフェンスは使わないでください。"
         "説明が必要なCOBOLコードは、短い架空の一般例だけにしてください。"
+        "コード例では記号の < や > を使わず、IS LESS THAN / IS GREATER THAN のように英単語で書いてください。"
         "日本語で600〜1400字程度。返答はJSON objectのみで、title、bodyを返してください。"
     )
     user = (
@@ -180,7 +197,10 @@ def generate_article(api_key, date, previous_titles):
             if attempt == 2:
                 raise
             validation_feedback = str(error)
-            print(f"Generated COBOL article failed validation; retrying with the same topic ({attempt + 1}/2).")
+            print(
+                f"Generated COBOL article failed validation; retrying with the same topic "
+                f"({attempt + 1}/2): {validation_feedback}"
+            )
 
     raise RuntimeError("Generated article did not pass validation; nothing was published")
 
